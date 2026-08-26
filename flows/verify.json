@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "verify",
+  "entry": "acceptance",
+  "nodes": {
+    "acceptance": { "kind": "review", "evidence": ["evaluation"], "minReviewers": 2 },
+    "gate-acceptance": { "kind": "gate" },
+    "audit": { "kind": "review", "evidence": ["evaluation"], "minReviewers": 2 },
+    "gate-audit": { "kind": "gate" },
+    "e2e-user": { "kind": "execute", "evidence": ["test-result"] },
+    "gate-e2e": { "kind": "gate" }
+  },
+  "transitions": {
+    "acceptance": { "PASS": "gate-acceptance" },
+    "gate-acceptance": { "PASS": "audit", "FAIL": "acceptance", "ITERATE": "acceptance" },
+    "audit": { "PASS": "gate-audit" },
+    "gate-audit": { "PASS": "e2e-user", "FAIL": "acceptance", "ITERATE": "acceptance" },
+    "e2e-user": { "PASS": "gate-e2e" },
+    "gate-e2e": { "PASS": null, "FAIL": "acceptance", "ITERATE": "acceptance" }
+  },
+  "limits": { "maxEdgeVisits": 3, "maxNodeVisits": 5, "maxSteps": 20 }
+}

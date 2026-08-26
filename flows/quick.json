@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "quick",
+  "entry": "build",
+  "nodes": {
+    "build": { "kind": "work" },
+    "review": { "kind": "review", "evidence": ["evaluation"], "minReviewers": 2 },
+    "test-design": { "kind": "review", "evidence": ["evaluation", "test-plan"], "minReviewers": 2 },
+    "test-execute": { "kind": "execute", "evidence": ["test-result"] },
+    "gate": { "kind": "gate" }
+  },
+  "transitions": {
+    "build": { "PASS": "review" },
+    "review": { "PASS": "test-design", "FAIL": "build", "ITERATE": "build" },
+    "test-design": { "PASS": "test-execute" },
+    "test-execute": { "PASS": "gate", "FAIL": "build", "ITERATE": "build" },
+    "gate": { "PASS": null, "FAIL": "build", "ITERATE": "build" }
+  },
+  "limits": { "maxEdgeVisits": 2, "maxNodeVisits": 3, "maxSteps": 15 }
+}

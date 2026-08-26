@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "review",
+  "entry": "review",
+  "nodes": {
+    "review": { "kind": "review", "evidence": ["evaluation"], "minReviewers": 2 },
+    "gate": { "kind": "gate" }
+  },
+  "transitions": {
+    "review": { "PASS": "gate" },
+    "gate": { "PASS": null, "FAIL": "review", "ITERATE": "review" }
+  },
+  "limits": { "maxEdgeVisits": 3, "maxNodeVisits": 5, "maxSteps": 10 }
+}

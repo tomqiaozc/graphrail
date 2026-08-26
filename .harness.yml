@@ -1,0 +1,24 @@
+# Quality Gate config for graphrail
+stack: node
+
+critical_paths:
+  - bin/**
+  - lib/**
+  - flows/**
+  - skill/**
+
+# mechanical_checks:
+#   # Override preset defaults or add project-specific checks
+#   migration:
+#     cmd: python3 manage.py migrate --check --dry-run
+#     scope: "migrations/**"
+#     required: true
+
+levels:
+  trivial:
+    max_lines: 10
+  standard:
+    max_lines: 100
+    perspectives: [bug-finder]
+  critical:
+    perspectives: [bug-finder, security, api-compat, query-perf]

@@ -1,0 +1,39 @@
+{
+  "name": "graphrail",
+  "version": "0.1.0",
+  "description": "Deterministic graph harness for evidence-backed agent workflows.",
+  "type": "module",
+  "bin": {
+    "graphrail": "bin/graphrail.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "flows",
+    "skill",
+    "roles",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "test:identity": "node test/identity.test.mjs",
+    "test:pack": "bash test/package-install.sh"
+  },
+  "keywords": [
+    "agent",
+    "graph",
+    "harness",
+    "workflow",
+    "verification"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomqiaozc/graphrail.git"
+  },
+  "homepage": "https://github.com/tomqiaozc/graphrail"
+}
