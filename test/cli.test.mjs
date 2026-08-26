@@ -13,6 +13,8 @@ test("CLI initializes, reports status, and visualizes JSON", () => {
   const cwd = project();
   assert.equal(run(["init", "--flow", "quick", "--task", "Patch"], cwd).created, true);
   assert.equal(run(["status"], cwd).currentNode, "build");
+  assert.equal(run(["status"], cwd).trustedAdapter, false);
+  assert.match(run(["status"], cwd).artifactDir, /nodes\/build\/run_1$/);
   assert.equal(run(["viz", "--json"], cwd).flow, "quick");
   assert.equal(run(["ls"], cwd).sessions.length, 1);
 });

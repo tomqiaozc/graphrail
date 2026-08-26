@@ -7,8 +7,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { advance, finalize, gotoNode, route, stop, transition, validateChain, visualize } from "../lib/engine.mjs";
 import { parseArtifact, recordTest, sealNode, validateHandshake } from "../lib/evidence.mjs";
-import { createSession, listSessions, readState, resolveSession } from "../lib/session.mjs";
+import { createSession, listSessions, readState, resolveSession, runDir } from "../lib/session.mjs";
 import { loadTemplate } from "../lib/templates.mjs";
+import { runClaudeAdapter } from "../lib/claude-adapter.mjs";
 import { flag, flags, json, readJson } from "../lib/util.mjs";
 
 const args = process.argv.slice(2);
@@ -27,7 +28,9 @@ function help() {
     `  seal [--node <id>] --verdict <V> --artifact <type:path:actor:agentRunId>...\n` +
     `  test --command <shell command>\n` +
     `  validate [handshake.json] | advance | finalize | viz [--json]\n` +
-    `  stop | goto <node> | install claude\n`);
+    `  stop | goto <node> | install claude\n` +
+    `  claude --flow <name|file> --task <text> --max-budget-usd <amount>\n` +
+    `  claude --resume [--max-budget-usd <amount>]\n`);
 }
 
 try {
@@ -41,8 +44,9 @@ try {
       break;
     }
     case "status": {
-      const state = readState(session());
-      json({ session: state.id, flow: state.flowId, task: state.task, currentNode: state.currentNode, runId: `run_${state.currentRun}`, status: state.status, steps: state.totalSteps, limits: state.template.limits });
+      const sessionDir = session();
+      const state = readState(sessionDir);
+      json({ session: state.id, sessionDir, flow: state.flowId, task: state.task, currentNode: state.currentNode, runId: `run_${state.currentRun}`, artifactDir: runDir(sessionDir, state.currentNode, state.currentRun), trustedAdapter: existsSync(resolve(sessionDir, "adapter.json")), status: state.status, steps: state.totalSteps, limits: state.template.limits });
       break;
     }
     case "ls": json({ sessions: listSessions(projectDir) }); break;
@@ -99,6 +103,41 @@ try {
       cpSync(resolve(packageRoot, "skill", "SKILL.md"), resolve(target, "SKILL.md"));
       cpSync(resolve(packageRoot, "roles"), resolve(target, "roles"), { recursive: true, force: true });
       json({ installed: true, adapter: "claude", path: target });
+      break;
+    }
+    case "claude": {
+      const resume = args.includes("--resume");
+      let sessionDir;
+      let task;
+      let flow;
+      if (resume) {
+        sessionDir = session();
+        const state = readState(sessionDir);
+        task = state.task;
+        flow = state.flowId;
+      } else {
+        flow = flag(args, "flow");
+        task = flag(args, "task", "");
+        if (!flow) throw new Error("--flow is required");
+        if (!task) throw new Error("--task is required");
+        sessionDir = createSession(flow, task, projectDir).dir;
+      }
+      const budget = Number(flag(args, "max-budget-usd", 5));
+      if (!Number.isFinite(budget) || budget <= 0) throw new Error("--max-budget-usd must be positive");
+      const prompt = resume
+        ? "Use /graphrail to resume the already initialized session. Continue from the authoritative current node until finalize; do not restart completed work."
+        : `Use /graphrail to execute the already initialized ${flow} session for this task: ${task}. Continue until finalize; do not create another session.`;
+      const result = await runClaudeAdapter(sessionDir, {
+        resume,
+        prompt,
+        maxBudgetUsd: budget,
+        model: flag(args, "model"),
+        effort: flag(args, "effort"),
+        permissionMode: flag(args, "permission-mode"),
+        dangerouslySkipPermissions: args.includes("--dangerously-skip-permissions"),
+      });
+      json(result);
+      if (result.isError) process.exitCode = 1;
       break;
     }
     case "help": case "--help": case "-h": case undefined: help(); break;

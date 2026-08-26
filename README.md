@@ -2,7 +2,7 @@
 
 GraphRail is a zero-dependency, deterministic graph harness for evidence-backed agent workflows. Agents decide how to do work; GraphRail decides whether a workflow may advance.
 
-> **Status: Experimental.** The deterministic Harness has full automated coverage, but the Claude Code adapter has not yet passed all four real end-to-end flows within its operating budget. See [VALIDATION.md](VALIDATION.md).
+> **Status: Production candidate.** The deterministic Harness, managed Claude adapter, package installation, interruption recovery, and all four real-flow acceptance fixtures pass. The remaining boundary is documented in [VALIDATION.md](VALIDATION.md): GraphRail does not defend against a malicious process with unrestricted access to the same OS account.
 
 ## Why it exists
 
@@ -21,11 +21,26 @@ This is intentionally a harness, not an agent framework. Flow files cannot execu
 ## Install
 
 ```bash
-npm install -g graphrail
+npm install -g github:tomqiaozc/graphrail
 graphrail install claude
 ```
 
-Node.js 18 or newer is required.
+The bare npm package has not been published yet; the GitHub install above is the supported installation path. Node.js 18 or newer is required.
+
+For trusted Claude review provenance, launch work through the managed adapter:
+
+```bash
+graphrail claude --flow quick --task "Add input validation" --max-budget-usd 20
+
+# Resume the same Claude and GraphRail sessions after an API interruption.
+graphrail claude --resume --max-budget-usd 20
+```
+
+The adapter initializes the GraphRail session, assigns a stable Claude session ID, records structured lifecycle hook events, and binds reviewer-written artifacts to exact subagent runs. Direct `/graphrail` use remains useful for exploration, but review gates fail closed unless trusted adapter evidence is present.
+
+Managed runs preserve the caller's reasoning-effort setting and use dedicated Sonnet implementer/reviewer agents by default. This intentionally favors independent review quality over minimum model cost. Use `--effort <level>` to override reasoning effort deliberately.
+
+`--max-budget-usd` is an external safety ceiling required by Claude Code, not a GraphRail quality target. GraphRail records model cost for diagnostics but never weakens reviewers, evidence requirements, or gates to meet a cost goal.
 
 ## Built-in flows
 
@@ -106,7 +121,9 @@ The final gate is not a ceremonial node. `graphrail advance` at a gate revalidat
 
 Each evaluation artifact must contain `VERDICT: PASS`, `VERDICT: ITERATE`, `VERDICT: FAIL`, or `VERDICT: BLOCKED` (JSON with a `verdict` field is also accepted). Gates aggregate these markers with fail-closed precedence and reject a requested verdict that does not match the evidence.
 
-Review handshakes also require distinct subagent run IDs. Actor labels alone are not accepted as proof of independence, and a failed subagent may not be replaced by an evaluation authored by the orchestrator.
+Review handshakes also require distinct attested subagent run IDs. Actor labels and model-authored IDs are not accepted as proof of independence. Each evaluation hash must match a Write/Edit event between that reviewer's trusted lifecycle start and completion; a failed subagent cannot be replaced by an evaluation authored by the orchestrator.
+
+The managed adapter raises the provenance boundary from model-authored text to Claude Code's structured hook stream. It does not claim protection from a malicious process with unrestricted access to the same operating-system account; use OS sandboxing when that is part of the threat model.
 
 ## Development
 

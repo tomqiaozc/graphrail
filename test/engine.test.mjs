@@ -6,20 +6,36 @@ import { resolve } from "node:path";
 import { advance, finalize, gotoNode, route, transition, validateChain } from "../lib/engine.mjs";
 import { recordTest, sealNode, validateHandshake } from "../lib/evidence.mjs";
 import { createSession, handshakePath, readState } from "../lib/session.mjs";
-import { readJson } from "../lib/util.mjs";
+import { bindClaudeAdapter, recordClaudeEvent } from "../lib/attestation.mjs";
+import { fileHash, readJson } from "../lib/util.mjs";
 
 function project() { return mkdtempSync(resolve(tmpdir(), "graphrail-engine-")); }
 function artifact(dir, name, content) { const path = resolve(dir, name); writeFileSync(path, content); return path; }
+let eventSequence = 0;
+function attestReviews(dir, artifacts) {
+  const claudeSessionId = "00000000-0000-4000-8000-000000000001";
+  bindClaudeAdapter(dir, claudeSessionId);
+  for (const item of artifacts.filter((entry) => entry.type === "evaluation")) {
+    for (const [hookEventName, extra] of [
+      ["SubagentStart", {}],
+      ["PostToolUse", { toolName: "Write", artifactPath: item.path, artifactHash: fileHash(item.path) }],
+      ["SubagentStop", {}],
+    ]) {
+      recordClaudeEvent(dir, { eventId: `event-${eventSequence += 1}`, hookEventName, claudeSessionId, agentId: item.agentRunId, agentType: "graphrail-reviewer", ...extra });
+    }
+  }
+  return artifacts;
+}
 
 test("review happy path seals independent evidence and finalizes", () => {
   const root = project();
   const { dir } = createSession("review", "Inspect change", root);
   const first = artifact(root, "first.md", "Finding A with evidence\nVERDICT: PASS");
   const second = artifact(root, "second.md", "Finding B with different evidence\nVERDICT: PASS");
-  sealNode(dir, [
+  sealNode(dir, attestReviews(dir, [
     { type: "evaluation", path: first, actor: "security", agentRunId: "agent-security-1" },
     { type: "evaluation", path: second, actor: "tester", agentRunId: "agent-tester-2" },
-  ]);
+  ]));
   assert.equal(advance(dir).next, "gate");
   assert.equal(transition(dir, "PASS").status, "ready-to-finalize");
   assert.equal(existsSync(handshakePath(dir, "gate", 2)), true);
@@ -35,6 +51,7 @@ function evidenceFor(root, dir, state) {
       { type: "evaluation", path: artifact(root, `${state.currentRun}-review-a.md`, `review A for ${state.currentNode}\nVERDICT: PASS`), actor: "skeptic-owner", agentRunId: `agent-a-${state.currentRun}` },
       { type: "evaluation", path: artifact(root, `${state.currentRun}-review-b.md`, `review B for ${state.currentNode}\nVERDICT: PASS`), actor: "tester", agentRunId: `agent-b-${state.currentRun}` },
     );
+    attestReviews(dir, artifacts);
   }
   if ((node.evidence || []).includes("test-plan")) {
     artifacts.push({ type: "test-plan", path: artifact(root, `${state.currentRun}-plan.md`, "test plan with negative and boundary cases"), actor: "tester" });
@@ -86,10 +103,10 @@ test("artifact tampering invalidates exact run evidence", () => {
   const { dir } = createSession("review", "Inspect", root);
   const first = artifact(root, "a.md", "first\nVERDICT: PASS");
   const second = artifact(root, "b.md", "second\nVERDICT: PASS");
-  sealNode(dir, [
+  sealNode(dir, attestReviews(dir, [
     { type: "evaluation", path: first, actor: "one", agentRunId: "agent-one-1" },
     { type: "evaluation", path: second, actor: "two", agentRunId: "agent-two-2" },
-  ]);
+  ]));
   const sealed = handshakePath(dir, "review", 1);
   const handshake = readJson(sealed);
   writeFileSync(resolve(sealed, "..", handshake.artifacts[0].path), "tampered");
@@ -128,7 +145,7 @@ test("stale handshake cannot authorize a later run", () => {
   const { dir } = createSession("review", "Inspect", root);
   const first = artifact(root, "a.md", "first\nVERDICT: PASS");
   const second = artifact(root, "b.md", "second\nVERDICT: PASS");
-  sealNode(dir, [{ type: "evaluation", path: first, actor: "one", agentRunId: "agent-one-1" }, { type: "evaluation", path: second, actor: "two", agentRunId: "agent-two-2" }]);
+  sealNode(dir, attestReviews(dir, [{ type: "evaluation", path: first, actor: "one", agentRunId: "agent-one-1" }, { type: "evaluation", path: second, actor: "two", agentRunId: "agent-two-2" }]));
   gotoNode(dir, "review");
   assert.throws(() => advance(dir), /run_2|not sealed/);
 });
@@ -138,7 +155,7 @@ test("gate mechanically aggregates evaluation verdicts", () => {
   const { dir } = createSession("review", "Inspect", root);
   const first = artifact(root, "a.md", "Needs a repair\nVERDICT: ITERATE");
   const second = artifact(root, "b.md", "No blocking issue\nVERDICT: PASS");
-  sealNode(dir, [{ type: "evaluation", path: first, actor: "one", agentRunId: "agent-one-1" }, { type: "evaluation", path: second, actor: "two", agentRunId: "agent-two-2" }], "PASS");
+  sealNode(dir, attestReviews(dir, [{ type: "evaluation", path: first, actor: "one", agentRunId: "agent-one-1" }, { type: "evaluation", path: second, actor: "two", agentRunId: "agent-two-2" }]), "PASS");
   advance(dir);
   assert.throws(() => transition(dir, "PASS"), /requires ITERATE/);
   assert.equal(advance(dir).next, null);
@@ -161,6 +178,61 @@ test("review rejects missing or duplicate subagent run IDs", () => {
     { type: "evaluation", path: first, actor: "one", agentRunId: "agent-shared" },
     { type: "evaluation", path: second, actor: "two", agentRunId: "agent-shared" },
   ]), /distinct subagent run IDs/);
+});
+
+test("review rejects distinct model-authored IDs without trusted lifecycle events", () => {
+  const root = project();
+  const { dir } = createSession("review", "Inspect", root);
+  const first = artifact(root, "a.md", "A\nVERDICT: PASS");
+  const second = artifact(root, "b.md", "B\nVERDICT: PASS");
+  assert.throws(() => sealNode(dir, [
+    { type: "evaluation", path: first, actor: "one", agentRunId: "agent-model-one" },
+    { type: "evaluation", path: second, actor: "two", agentRunId: "agent-model-two" },
+  ]), /trusted Claude adapter binding/);
+});
+
+test("reviewer failure cannot be replaced by an unattested completion", () => {
+  const root = project();
+  const { dir } = createSession("review", "Inspect", root);
+  const first = artifact(root, "a.md", "A\nVERDICT: PASS");
+  const second = artifact(root, "b.md", "B\nVERDICT: PASS");
+  const claudeSessionId = "00000000-0000-4000-8000-000000000001";
+  bindClaudeAdapter(dir, claudeSessionId);
+  for (const item of [
+    { path: first, agentRunId: "agent-failed-one", failed: true },
+    { path: second, agentRunId: "agent-good-two", failed: false },
+  ]) {
+    recordClaudeEvent(dir, { eventId: `event-${eventSequence += 1}`, hookEventName: "SubagentStart", claudeSessionId, agentId: item.agentRunId, agentType: "graphrail-reviewer" });
+    recordClaudeEvent(dir, { eventId: `event-${eventSequence += 1}`, hookEventName: "PostToolUse", claudeSessionId, agentId: item.agentRunId, agentType: "graphrail-reviewer", toolName: "Write", artifactPath: item.path, artifactHash: fileHash(item.path) });
+    recordClaudeEvent(dir, { eventId: `event-${eventSequence += 1}`, hookEventName: item.failed ? "StopFailure" : "SubagentStop", claudeSessionId, agentId: item.agentRunId, agentType: "graphrail-reviewer" });
+  }
+  assert.throws(() => sealNode(dir, [
+    { type: "evaluation", path: first, actor: "one", agentRunId: "agent-failed-one" },
+    { type: "evaluation", path: second, actor: "two", agentRunId: "agent-good-two" },
+  ]), /no trusted completion|failed before trusted completion/);
+});
+
+test("general-purpose agents cannot satisfy independent review provenance", () => {
+  const root = project();
+  const { dir } = createSession("review", "Inspect", root);
+  const first = artifact(root, "a.md", "A\nVERDICT: PASS");
+  const second = artifact(root, "b.md", "B\nVERDICT: PASS");
+  const artifacts = [
+    { type: "evaluation", path: first, actor: "one", agentRunId: "agent-general-one" },
+    { type: "evaluation", path: second, actor: "two", agentRunId: "agent-general-two" },
+  ];
+  const claudeSessionId = "00000000-0000-4000-8000-000000000001";
+  bindClaudeAdapter(dir, claudeSessionId);
+  for (const item of artifacts) {
+    for (const [hookEventName, extra] of [
+      ["SubagentStart", {}],
+      ["PostToolUse", { toolName: "Write", artifactPath: item.path, artifactHash: fileHash(item.path) }],
+      ["SubagentStop", {}],
+    ]) {
+      recordClaudeEvent(dir, { eventId: `event-${eventSequence += 1}`, hookEventName, claudeSessionId, agentId: item.agentRunId, agentType: "general-purpose", ...extra });
+    }
+  }
+  assert.throws(() => sealNode(dir, artifacts), /not a trusted graphrail-reviewer/);
 });
 
 test("work nodes cannot complete without a deliverable", () => {

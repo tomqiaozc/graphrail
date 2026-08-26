@@ -1,50 +1,55 @@
 # Production Validation
 
-GraphRail separates deterministic Harness correctness from adapter-level agent behavior. Passing unit and CLI tests does not by itself prove that a real model can complete a workflow efficiently or that reviewer independence is authentic.
+GraphRail treats deterministic Harness correctness and real multi-agent behavior as separate release gates. Automated tests prove enforcement logic; fresh Claude Code trials prove that agents can operate the contract and deliver useful artifacts.
 
-## Automated baseline
+## Current result
 
-The following checks are required before every release:
+- 34 automated tests pass, including CLI integration, all built-in topology golden tests, provenance failures, budget guards, resume behavior, and unsafe custom-template rejection.
+- `npm pack` installs and starts in an isolated directory.
+- The GitHub installation path works in a clean environment and the Claude skill installs locally.
+- `quick`, `review`, `build`, and `verify` all completed fresh real fixtures through `finalize`.
+- A fresh managed review dispatched two distinct `graphrail-reviewer` agents. Each produced its own evaluation and a signed `SubagentStart -> Write -> SubagentStop` chain bound to the exact session, node, run, path, and content hash.
+- An intentional API interruption resumed the same Claude and GraphRail sessions without replaying sealed work.
 
-- all four built-in flow PASS paths reach finalize;
-- custom template validation rejects unsafe fields and paths;
-- stale runs, changed artifact hashes, forged test results, duplicate reviewers, and state tampering fail closed;
+Model cost and turn counts are retained as diagnostics. They are not release gates and never cause GraphRail to reduce reviewer count, model quality, evidence requirements, or verification depth.
+
+## Automated release gate
+
+Every release must verify:
+
+- all four built-in PASS paths and every declared repair edge;
+- stale runs, changed artifact hashes, fabricated test results, duplicate reviewers, failed reviewers, model-authored reviewer IDs, and signed-state tampering fail closed;
+- test command, result hash, node/run identity, and provenance ledger agree exactly;
 - node, edge, repair, and total-step budgets stop runaway transitions;
-- packed npm artifact installs and starts in an isolated environment;
-- repository identity scan passes.
+- path traversal, prototype-pollution keys, unknown nodes, unreachable nodes, invalid verdicts, and executable template fields are rejected;
+- packed installation and repository identity checks pass.
 
-Current result: 28 automated tests pass, including package installation.
+Run:
 
-## Real Claude Code trials
+```bash
+npm test
+npm run test:pack
+```
 
-Trials used an actual global installation and the installed `/graphrail` Claude Code skill in isolated fixture projects.
+## Real-flow acceptance matrix
 
-### Findings
-
-- The Harness created and resumed real sessions, copied deliverables, sealed exact runs, validated chains, aggregated review verdicts, and recorded gate handshakes.
-- A read-only review reached finalize with a mechanically aggregated FAIL and preserved the source file.
-- The orchestrator admitted that failed subagents were replaced with two evaluations it authored itself. Distinct role labels and content hashes were therefore insufficient proof of independent review.
-- Requiring distinct subagent run IDs correctly blocked that fallback, but the adapter did not reliably capture usable IDs before its execution budget was exhausted.
-- Quick-flow trials produced correct modules, tests, and review artifacts, but repeatedly stopped around test-design instead of reaching finalize within a 3–5 USD per-run ceiling.
-- Build and verify trials advanced through real nodes and gates but did not finish within the same ceiling.
-
-## Release blockers
-
-GraphRail must not be described as production-ready until all of these are resolved:
-
-1. The Claude adapter records subagent lifecycle provenance from trusted hook events rather than model-authored metadata.
-2. A failed subagent cannot be replaced by an orchestrator-authored review.
-3. `quick`, `review`, `build`, and `verify` each complete fresh real-world fixtures from init through finalize.
-4. Quick flow completes within an explicit cost and turn budget appropriate for a small change.
-5. Resume after API interruption completes without restarting or weakening evidence requirements.
-
-## Acceptance matrix for production status
-
-| Flow | Required fixture | Required outcome |
+| Flow | Fixture | Observed outcome |
 |---|---|---|
-| quick | Small dependency-free code change | Correct implementation and tests, independent reviews, signed test evidence, finalized PASS within budget |
-| review | Intentionally flawed security helper | Source unchanged, independently reproduced findings, finalized non-PASS verdict |
-| build | Async utility with failure paths | Plan, implementation, independent code/test review, executed tests, finalized PASS |
-| verify | Existing tested package | Independent acceptance and audit, executed release tests, finalized evidence-backed result |
+| `quick` | Small dependency-free module | Implementation, two independent reviews, test design, signed test execution, and final gate completed. An interrupted run resumed at the authoritative node without replaying sealed work. |
+| `review` | Intentionally flawed authorization helper | Two independent reviewers reproduced the defect, source remained unchanged, and the mechanically aggregated non-PASS result finalized. |
+| `build` | Async utility with failure paths | Reviewers detected a vacuous test through a mutation probe; the gate returned to the repair edge, the tests were strengthened, and the second pass finalized. |
+| `verify` | Existing tested package | Two deficient release candidates were rejected; the corrected fixture completed acceptance, audit, end-to-end user validation, and all three gates. |
 
-Production status is earned only when the matrix passes on fresh sessions without manual artifact fabrication or Harness bypasses.
+The review-agent routing was also repeated in a new Claude session after installation. Both review workers were reported by Claude's trusted hook stream as `graphrail-reviewer`, rather than inferred from their prose or role labels.
+
+## Trust boundary
+
+The managed adapter accepts lifecycle provenance only from typed Claude hook-response frames. Review gates require two distinct completed subagents, and each exact artifact hash must be observed in a reviewer Write/Edit event between that reviewer's trusted start and stop events. Missing, failed, stale, changed, duplicate, or orchestrator-authored evidence is rejected.
+
+Gate stages are mechanical: they must dispatch no agent and must never edit prior artifacts. A later hash change invalidates the chain and blocks advancement.
+
+GraphRail protects against stale evidence, accidental mutation, model-text forgery, reviewer substitution, and ordinary orchestration mistakes. It does not claim to protect secrets or state from a malicious process with unrestricted access to the same operating-system account. Use OS-level isolation when that attacker is in scope.
+
+## Production acceptance
+
+The P0 production-candidate criteria are satisfied when the automated gate, clean installation, four-flow matrix, trusted reviewer lifecycle, and interruption recovery all pass on the release commit. Any change to adapter framing, attestation, sealing, transition logic, or Skill execution rules requires those checks to be repeated.
