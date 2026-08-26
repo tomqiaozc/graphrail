@@ -24,14 +24,16 @@ Run `graphrail ls` first. Ask before resuming an active session. Start new work 
 2. Execute according to node kind:
    - `plan`: use architect; produce a concrete plan artifact.
    - `work`: use a fresh implementer. The implementer must not review its own work.
-   - `review`: dispatch at least two fresh, independent roles. Each writes a distinct evaluation artifact.
+   - `review`: dispatch exactly two fresh, independent subagents unless the task clearly requires a third. Record each returned subagent run ID. Each subagent writes one concise evaluation artifact, ending with `VERDICT: PASS|ITERATE|FAIL|BLOCKED`.
    - `execute`: run real checks. Use `graphrail test --command <command>` so results receive provenance.
-   - `gate`: call `graphrail transition --verdict <verdict>`; do not create a human gate opinion.
-3. Seal non-gate work with `graphrail seal`, listing every artifact and actor.
-4. Call `graphrail advance`; use only its returned node.
+   - `gate`: do no human work. Call `graphrail advance`; it mechanically aggregates evidence and routes the verdict.
+3. Seal every non-gate node with `graphrail seal --verdict PASS`, listing every deliverable and actor. Review artifacts use `evaluation:path:role:subagentRunId`; GraphRail rejects missing or duplicate subagent run IDs. Never author a substitute evaluation when a subagent fails. A review node is PASS when the independent reviews completed; findings belong in evaluation artifacts and are decided by the gate.
+4. Call `graphrail advance`; use only its returned node. At a gate this same command synthesizes and transitions automatically.
 5. Continue until the terminal edge, then call `graphrail finalize`.
 
-Use PASS only when the run's evidence supports it. Use ITERATE for repairable findings, FAIL for material failure, and BLOCKED when external input is required. Never reuse an agent as both builder and reviewer. Forward repository instructions and verification commands to every dispatched agent.
+For evaluation artifacts, use PASS when evidence supports completion, ITERATE for repairable findings, FAIL for material failure, and BLOCKED when external input is required. Never reuse an agent as both builder and reviewer. Forward repository instructions and verification commands to every dispatched agent.
+
+Keep each evaluator artifact under 100 lines. Do not repeat probes already supported by captured evidence. If a gate loops back, identify the concrete state change required before dispatching reviewers again; never re-review unchanged inputs. The `review` built-in flow terminates with its aggregated verdict because its purpose is to report findings, not repair them.
 
 ## Roles
 

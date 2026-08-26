@@ -2,6 +2,8 @@
 
 GraphRail is a zero-dependency, deterministic graph harness for evidence-backed agent workflows. Agents decide how to do work; GraphRail decides whether a workflow may advance.
 
+> **Status: Experimental.** The deterministic Harness has full automated coverage, but the Claude Code adapter has not yet passed all four real end-to-end flows within its operating budget. See [VALIDATION.md](VALIDATION.md).
+
 ## Why it exists
 
 Long agent workflows tend to fail in repeatable ways: a worker reviews its own output, a stale artifact is mistaken for the latest result, a test report is accepted without proving which command produced it, or a repair loop consumes the entire session. GraphRail turns those lessons into executable constraints:
@@ -30,7 +32,7 @@ Node.js 18 or newer is required.
 | Flow | Path | Best for |
 |---|---|---|
 | `quick` | build → review → test-design → test-execute → gate | Small, low-risk changes |
-| `review` | review → gate | Independent inspection without implementation |
+| `review` | review → gate → result | Independent inspection that terminates with PASS, ITERATE, FAIL, or BLOCKED |
 | `build` | brief → build → code-review → test-design → test-execute → gate | Full implementation with review and verification |
 | `verify` | acceptance → audit → e2e-user, with a gate after each stage | Release readiness of existing work |
 
@@ -49,8 +51,8 @@ graphrail advance
 
 # Review nodes require distinct actors and distinct content.
 graphrail seal --verdict PASS \
-  --artifact evaluation:/tmp/review-a.md:security \
-  --artifact evaluation:/tmp/review-b.md:tester
+  --artifact evaluation:/tmp/review-a.md:security:agent_12ab34cd \
+  --artifact evaluation:/tmp/review-b.md:tester:agent_56ef78ab
 
 # Execute nodes accept only harness-recorded test results.
 graphrail test --command "npm test"
@@ -100,9 +102,11 @@ Templates declare contracts only. They cannot contain commands, JavaScript hooks
 
 Each target project receives a local `.graphrail/` directory containing session state, exact node runs, handshakes, copied artifacts, and a signed provenance ledger. It should not be committed. `graphrail ls` discovers sessions and `graphrail validate` checks the recorded chain.
 
-The final gate is not a ceremonial node. A PASS transition revalidates upstream exact-run handshakes and artifact hashes. If any authoritative evidence has changed, advancement stops.
+The final gate is not a ceremonial node. `graphrail advance` at a gate revalidates upstream exact-run handshakes and artifact hashes, recomputes the verdict, and follows the matching edge. If any authoritative evidence has changed, advancement stops.
 
 Each evaluation artifact must contain `VERDICT: PASS`, `VERDICT: ITERATE`, `VERDICT: FAIL`, or `VERDICT: BLOCKED` (JSON with a `verdict` field is also accepted). Gates aggregate these markers with fail-closed precedence and reject a requested verdict that does not match the evidence.
+
+Review handshakes also require distinct subagent run IDs. Actor labels alone are not accepted as proof of independence, and a failed subagent may not be replaced by an evaluation authored by the orchestrator.
 
 ## Development
 

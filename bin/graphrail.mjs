@@ -24,7 +24,7 @@ function help() {
     `Commands:\n` +
     `  init --flow <name|file> --task <text> [--project <dir>]\n` +
     `  status | ls | route --verdict <V> | transition --verdict <V>\n` +
-    `  seal [--node <id>] --verdict <V> --artifact <type:path:actor>...\n` +
+    `  seal [--node <id>] --verdict <V> --artifact <type:path:actor:agentRunId>...\n` +
     `  test --command <shell command>\n` +
     `  validate [handshake.json] | advance | finalize | viz [--json]\n` +
     `  stop | goto <node> | install claude\n`);

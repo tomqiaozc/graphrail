@@ -17,8 +17,8 @@ test("review happy path seals independent evidence and finalizes", () => {
   const first = artifact(root, "first.md", "Finding A with evidence\nVERDICT: PASS");
   const second = artifact(root, "second.md", "Finding B with different evidence\nVERDICT: PASS");
   sealNode(dir, [
-    { type: "evaluation", path: first, actor: "security" },
-    { type: "evaluation", path: second, actor: "tester" },
+    { type: "evaluation", path: first, actor: "security", agentRunId: "agent-security-1" },
+    { type: "evaluation", path: second, actor: "tester", agentRunId: "agent-tester-2" },
   ]);
   assert.equal(advance(dir).next, "gate");
   assert.equal(transition(dir, "PASS").status, "ready-to-finalize");
@@ -32,12 +32,15 @@ function evidenceFor(root, dir, state) {
   const artifacts = [];
   if (node.kind === "review") {
     artifacts.push(
-      { type: "evaluation", path: artifact(root, `${state.currentRun}-review-a.md`, `review A for ${state.currentNode}\nVERDICT: PASS`), actor: "skeptic-owner" },
-      { type: "evaluation", path: artifact(root, `${state.currentRun}-review-b.md`, `review B for ${state.currentNode}\nVERDICT: PASS`), actor: "tester" },
+      { type: "evaluation", path: artifact(root, `${state.currentRun}-review-a.md`, `review A for ${state.currentNode}\nVERDICT: PASS`), actor: "skeptic-owner", agentRunId: `agent-a-${state.currentRun}` },
+      { type: "evaluation", path: artifact(root, `${state.currentRun}-review-b.md`, `review B for ${state.currentNode}\nVERDICT: PASS`), actor: "tester", agentRunId: `agent-b-${state.currentRun}` },
     );
   }
   if ((node.evidence || []).includes("test-plan")) {
     artifacts.push({ type: "test-plan", path: artifact(root, `${state.currentRun}-plan.md`, "test plan with negative and boundary cases"), actor: "tester" });
+  }
+  if (node.kind === "plan" || node.kind === "work") {
+    artifacts.push({ type: "deliverable", path: artifact(root, `${state.currentRun}-${state.currentNode}.md`, `deliverable for ${state.currentNode}`), actor: "engineer" });
   }
   return artifacts;
 }
@@ -49,7 +52,7 @@ function drivePassFlow(name) {
     const state = readState(dir);
     if (state.status === "ready-to-finalize") break;
     const node = state.template.nodes[state.currentNode];
-    if (node.kind === "gate") transition(dir, "PASS");
+    if (node.kind === "gate") advance(dir);
     else if (node.kind === "execute") {
       const recorded = recordTest(dir, "node --version", { exitCode: 0, durationMs: 1, stdout: "ok", stderr: "" });
       sealNode(dir, [{ type: "test-result", path: recorded.path, actor: "graphrail" }]);
@@ -73,8 +76,8 @@ test("review rejects self-review, duplicate actors, and duplicate content", () =
   const first = artifact(root, "a.md", "same\nVERDICT: PASS");
   const second = artifact(root, "b.md", "same\nVERDICT: PASS");
   assert.throws(() => sealNode(dir, [
-    { type: "evaluation", path: first, actor: "one" },
-    { type: "evaluation", path: second, actor: "one" },
+    { type: "evaluation", path: first, actor: "one", agentRunId: "agent-same-1" },
+    { type: "evaluation", path: second, actor: "one", agentRunId: "agent-same-2" },
   ]), /distinct actors|distinct content/);
 });
 
@@ -84,8 +87,8 @@ test("artifact tampering invalidates exact run evidence", () => {
   const first = artifact(root, "a.md", "first\nVERDICT: PASS");
   const second = artifact(root, "b.md", "second\nVERDICT: PASS");
   sealNode(dir, [
-    { type: "evaluation", path: first, actor: "one" },
-    { type: "evaluation", path: second, actor: "two" },
+    { type: "evaluation", path: first, actor: "one", agentRunId: "agent-one-1" },
+    { type: "evaluation", path: second, actor: "two", agentRunId: "agent-two-2" },
   ]);
   const sealed = handshakePath(dir, "review", 1);
   const handshake = readJson(sealed);
@@ -125,7 +128,7 @@ test("stale handshake cannot authorize a later run", () => {
   const { dir } = createSession("review", "Inspect", root);
   const first = artifact(root, "a.md", "first\nVERDICT: PASS");
   const second = artifact(root, "b.md", "second\nVERDICT: PASS");
-  sealNode(dir, [{ type: "evaluation", path: first, actor: "one" }, { type: "evaluation", path: second, actor: "two" }]);
+  sealNode(dir, [{ type: "evaluation", path: first, actor: "one", agentRunId: "agent-one-1" }, { type: "evaluation", path: second, actor: "two", agentRunId: "agent-two-2" }]);
   gotoNode(dir, "review");
   assert.throws(() => advance(dir), /run_2|not sealed/);
 });
@@ -135,10 +138,35 @@ test("gate mechanically aggregates evaluation verdicts", () => {
   const { dir } = createSession("review", "Inspect", root);
   const first = artifact(root, "a.md", "Needs a repair\nVERDICT: ITERATE");
   const second = artifact(root, "b.md", "No blocking issue\nVERDICT: PASS");
-  sealNode(dir, [{ type: "evaluation", path: first, actor: "one" }, { type: "evaluation", path: second, actor: "two" }], "PASS");
+  sealNode(dir, [{ type: "evaluation", path: first, actor: "one", agentRunId: "agent-one-1" }, { type: "evaluation", path: second, actor: "two", agentRunId: "agent-two-2" }], "PASS");
   advance(dir);
   assert.throws(() => transition(dir, "PASS"), /requires ITERATE/);
-  assert.equal(transition(dir, "ITERATE").next, "review");
+  assert.equal(advance(dir).next, null);
+});
+
+test("review node cannot encode the aggregate verdict in its handshake", () => {
+  const root = project();
+  const { dir } = createSession("review", "Inspect", root);
+  const first = artifact(root, "a.md", "Issue\nVERDICT: FAIL");
+  const second = artifact(root, "b.md", "Issue confirmed\nVERDICT: FAIL");
+  assert.throws(() => sealNode(dir, [{ type: "evaluation", path: first, actor: "one", agentRunId: "agent-one-1" }, { type: "evaluation", path: second, actor: "two", agentRunId: "agent-two-2" }], "FAIL"), /completion verdict must be PASS/);
+});
+
+test("review rejects missing or duplicate subagent run IDs", () => {
+  const root = project();
+  const { dir } = createSession("review", "Inspect", root);
+  const first = artifact(root, "a.md", "A\nVERDICT: PASS");
+  const second = artifact(root, "b.md", "B\nVERDICT: PASS");
+  assert.throws(() => sealNode(dir, [
+    { type: "evaluation", path: first, actor: "one", agentRunId: "agent-shared" },
+    { type: "evaluation", path: second, actor: "two", agentRunId: "agent-shared" },
+  ]), /distinct subagent run IDs/);
+});
+
+test("work nodes cannot complete without a deliverable", () => {
+  const root = project();
+  const { dir } = createSession("quick", "Build", root);
+  assert.throws(() => sealNode(dir, [], "PASS"), /deliverable artifact/);
 });
 
 test("failing test result cannot be sealed as PASS", () => {
@@ -165,9 +193,11 @@ test("edge, node, and total budgets are enforced", () => {
     limits: { maxEdgeVisits: 1, maxNodeVisits: 2, maxSteps: 2 },
   }));
   const { dir } = createSession(flow, "Loop", root);
-  sealNode(dir, [], "ITERATE");
+  const first = artifact(root, "first-work.md", "first attempt");
+  sealNode(dir, [{ type: "deliverable", path: first, actor: "engineer" }], "ITERATE");
   advance(dir);
-  sealNode(dir, [], "ITERATE");
+  const second = artifact(root, "second-work.md", "second attempt");
+  sealNode(dir, [{ type: "deliverable", path: second, actor: "engineer" }], "ITERATE");
   assert.equal(route(dir, "ITERATE").allowed, false);
   assert.throws(() => advance(dir), /budget exhausted/);
 });

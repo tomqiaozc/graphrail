@@ -8,7 +8,7 @@
   },
   "transitions": {
     "review": { "PASS": "gate" },
-    "gate": { "PASS": null, "FAIL": "review", "ITERATE": "review" }
+    "gate": { "PASS": null, "FAIL": null, "ITERATE": null, "BLOCKED": null }
   },
   "limits": { "maxEdgeVisits": 3, "maxNodeVisits": 5, "maxSteps": 10 }
 }
