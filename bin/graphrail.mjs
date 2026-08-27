@@ -6,10 +6,11 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { advance, finalize, gotoNode, route, stop, transition, validateChain, visualize } from "../lib/engine.mjs";
-import { parseArtifact, recordTest, sealNode, validateHandshake } from "../lib/evidence.mjs";
+import { parseArtifact, recordTest, sealNode, testPlanHashForRun, validateHandshake } from "../lib/evidence.mjs";
 import { createSession, listSessions, readState, resolveSession, runDir } from "../lib/session.mjs";
 import { loadTemplate } from "../lib/templates.mjs";
 import { runClaudeAdapter } from "../lib/claude-adapter.mjs";
+import { parseTestOutput, runMutationProbe, workingTreeHash } from "../lib/testresults.mjs";
 import { flag, flags, json, readJson } from "../lib/util.mjs";
 
 const args = process.argv.slice(2);
@@ -26,7 +27,7 @@ function help() {
     `  init --flow <name|file> --task <text> [--project <dir>]\n` +
     `  status | ls | route --verdict <V> | transition --verdict <V>\n` +
     `  seal [--node <id>] --verdict <V> --artifact <type:path:actor:agentRunId>...\n` +
-    `  test --command <shell command>\n` +
+    `  test --command <shell> [--result-file <path> --format <fmt>] [--allow-zero-tests] [--probe <file>] [--timeout-ms <ms>]\n` +
     `  validate [handshake.json] | advance | finalize | viz [--json]\n` +
     `  stop | goto <node> | install claude\n` +
     `  claude --flow <name|file> --task <text> --max-budget-usd <amount>\n` +
@@ -64,10 +65,69 @@ try {
     case "test": {
       const commandText = flag(args, "command");
       if (!commandText) throw new Error("--command is required");
+      const resultFile = flag(args, "result-file");
+      const format = flag(args, "format");
+      const allowZeroTests = args.includes("--allow-zero-tests");
+      const timeoutMs = Number(flag(args, "timeout-ms", 120000));
+      const probes = flags(args, "probe");
+      const startedAt = new Date().toISOString();
+      const beforeHash = workingTreeHash(projectDir);
       const started = Date.now();
-      const executed = spawnSync(commandText, { cwd: projectDir, shell: true, encoding: "utf8", timeout: 120000 });
-      const recorded = recordTest(session(), commandText, { exitCode: executed.status ?? 1, durationMs: Date.now() - started, stdout: executed.stdout || "", stderr: executed.stderr || "" });
-      json({ recorded: true, path: recorded.path, exitCode: recorded.result.exitCode });
+      const executed = spawnSync(commandText, { cwd: projectDir, shell: true, encoding: "utf8", timeout: timeoutMs });
+      const afterHash = workingTreeHash(projectDir);
+      const stdout = executed.stdout || "";
+      const stderr = executed.stderr || "";
+      const exitCode = executed.signal ? 1 : (executed.status ?? 1);
+      // Structured stats: prefer an explicit result file, then parse the runner output.
+      let tests = null;
+      let testFormat = format || null;
+      if (resultFile) {
+        if (!existsSync(resultFile)) throw new Error(`result file not found: ${resultFile}`);
+        const parsed = parseTestOutput(readFileSync(resultFile, "utf8"), { format });
+        if (!parsed.structured) throw new Error(`unparseable test result file: ${resultFile}`);
+        tests = parsed;
+        testFormat = parsed.format;
+      } else {
+        const parsed = parseTestOutput(`${stdout}\n${stderr}`, { format });
+        if (parsed.structured) { tests = parsed; testFormat = parsed.format; }
+      }
+      const state = readState(session());
+      const node = state.template.nodes[state.currentNode];
+      const allowZero = allowZeroTests || node?.allowZeroTests === true;
+      const sessionDir = session();
+      const testPlanHash = testPlanHashForRun(sessionDir, state.currentNode, `run_${state.currentRun}`);
+      // Mutation probes prove fault sensitivity: a real mutation must turn the suite red.
+      const probeResults = [];
+      for (const probeTarget of probes) {
+        const probeResult = runMutationProbe(probeTarget, commandText, projectDir, { timeoutMs });
+        probeResults.push(probeResult);
+        if (probeResult.detected !== true) {
+          process.stderr.write(`graphrail: mutation probe on ${probeTarget} was NOT detected (baseline exit ${probeResult.baselineExitCode}, probe exit ${probeResult.probeExitCode})\n`);
+          process.exitCode = 1;
+        }
+      }
+      const recorded = recordTest(sessionDir, commandText, {
+        exitCode,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        stdout,
+        stderr,
+        workingTreeHash: beforeHash === afterHash ? beforeHash : null,
+        workingTreeChanged: beforeHash !== afterHash,
+        tests,
+        testFormat,
+        testPlanHash,
+        probes: probeResults.length ? probeResults : null,
+      });
+      const requiresProbe = node?.requireMutationProbe === true;
+      if (requiresProbe && probeResults.length === 0) {
+        process.stderr.write("graphrail: node requires a mutation probe but none was supplied (--probe)\n");
+        process.exitCode = 1;
+      }
+      const blocked = !allowZero && tests && tests.testsExecuted === 0 ? "blocked: zero tests executed" : null;
+      json({ recorded: true, path: recorded.path, exitCode, tests, testFormat, probes: probeResults, workingTreeChanged: beforeHash !== afterHash, blocked });
+      if (beforeHash !== afterHash) { process.stderr.write("graphrail: working tree changed during test execution\n"); process.exitCode = 1; }
+      if (blocked) process.exitCode = 1;
       break;
     }
     case "validate": {

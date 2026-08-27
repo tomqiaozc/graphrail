@@ -12,19 +12,22 @@ import { fileHash, readJson } from "../lib/util.mjs";
 function project() { return mkdtempSync(resolve(tmpdir(), "graphrail-engine-")); }
 function artifact(dir, name, content) { const path = resolve(dir, name); writeFileSync(path, content); return path; }
 let eventSequence = 0;
-function attestReviews(dir, artifacts) {
+function attest(dir, artifacts, agentType) {
   const claudeSessionId = "00000000-0000-4000-8000-000000000001";
   bindClaudeAdapter(dir, claudeSessionId);
-  for (const item of artifacts.filter((entry) => entry.type === "evaluation")) {
+  for (const item of artifacts) {
     for (const [hookEventName, extra] of [
       ["SubagentStart", {}],
       ["PostToolUse", { toolName: "Write", artifactPath: item.path, artifactHash: fileHash(item.path) }],
       ["SubagentStop", {}],
     ]) {
-      recordClaudeEvent(dir, { eventId: `event-${eventSequence += 1}`, hookEventName, claudeSessionId, agentId: item.agentRunId, agentType: "graphrail-reviewer", ...extra });
+      recordClaudeEvent(dir, { eventId: `event-${eventSequence += 1}`, hookEventName, claudeSessionId, agentId: item.agentRunId, agentType, ...extra });
     }
   }
   return artifacts;
+}
+function attestReviews(dir, artifacts) {
+  return attest(dir, artifacts, "graphrail-reviewer");
 }
 
 test("review happy path seals independent evidence and finalizes", () => {
@@ -47,17 +50,22 @@ function evidenceFor(root, dir, state) {
   const node = state.template.nodes[state.currentNode];
   const artifacts = [];
   if (node.kind === "review") {
+    const agentType = node.agentType || "graphrail-reviewer";
     artifacts.push(
       { type: "evaluation", path: artifact(root, `${state.currentRun}-review-a.md`, `review A for ${state.currentNode}\nVERDICT: PASS`), actor: "skeptic-owner", agentRunId: `agent-a-${state.currentRun}` },
       { type: "evaluation", path: artifact(root, `${state.currentRun}-review-b.md`, `review B for ${state.currentNode}\nVERDICT: PASS`), actor: "tester", agentRunId: `agent-b-${state.currentRun}` },
     );
-    attestReviews(dir, artifacts);
+    attest(dir, artifacts, agentType);
   }
   if ((node.evidence || []).includes("test-plan")) {
-    artifacts.push({ type: "test-plan", path: artifact(root, `${state.currentRun}-plan.md`, "test plan with negative and boundary cases"), actor: "tester" });
+    const plan = { type: "test-plan", path: artifact(root, `${state.currentRun}-plan.md`, "test plan with negative and boundary cases"), actor: "tester", agentRunId: `agent-plan-${state.currentRun}` };
+    artifacts.push(plan);
+    attest(dir, [plan], "graphrail-test-designer");
   }
   if (node.kind === "plan" || node.kind === "work") {
-    artifacts.push({ type: "deliverable", path: artifact(root, `${state.currentRun}-${state.currentNode}.md`, `deliverable for ${state.currentNode}`), actor: "engineer" });
+    const deliverable = { type: "deliverable", path: artifact(root, `${state.currentRun}-${state.currentNode}.md`, `deliverable for ${state.currentNode}`), actor: "engineer", agentRunId: `agent-impl-${state.currentRun}` };
+    artifacts.push(deliverable);
+    attest(dir, [deliverable], "graphrail-implementer");
   }
   return artifacts;
 }
@@ -71,7 +79,7 @@ function drivePassFlow(name) {
     const node = state.template.nodes[state.currentNode];
     if (node.kind === "gate") advance(dir);
     else if (node.kind === "execute") {
-      const recorded = recordTest(dir, "node --version", { exitCode: 0, durationMs: 1, stdout: "ok", stderr: "" });
+      const recorded = recordTest(dir, "node --version", { exitCode: 0, durationMs: 1, stdout: "ok", stderr: "", tests: { testsDiscovered: 3, testsExecuted: 3, testsPassed: 3, testsFailed: 0 } });
       sealNode(dir, [{ type: "test-result", path: recorded.path, actor: "graphrail" }]);
       advance(dir);
     } else {
@@ -134,7 +142,7 @@ test("execute evidence requires signed command provenance", () => {
     limits: { maxEdgeVisits: 2, maxNodeVisits: 3, maxSteps: 5 },
   }));
   const { dir } = createSession(flow, "Check", root);
-  const recorded = recordTest(dir, "node --version", { exitCode: 0, durationMs: 1, stdout: "ok", stderr: "" });
+  const recorded = recordTest(dir, "node --version", { exitCode: 0, durationMs: 1, stdout: "ok", stderr: "", tests: { testsDiscovered: 2, testsExecuted: 2, testsPassed: 2, testsFailed: 0 } });
   sealNode(dir, [{ type: "test-result", path: recorded.path, actor: "graphrail" }]);
   assert.equal(advance(dir).next, "gate");
   assert.equal(transition(dir, "PASS").status, "ready-to-finalize");
@@ -251,8 +259,77 @@ test("failing test result cannot be sealed as PASS", () => {
     limits: { maxEdgeVisits: 1, maxNodeVisits: 1, maxSteps: 1 },
   }));
   const { dir } = createSession(flow, "Check", root);
-  const recorded = recordTest(dir, "false", { exitCode: 1, durationMs: 1, stdout: "", stderr: "failed" });
+  const recorded = recordTest(dir, "false", { exitCode: 1, durationMs: 1, stdout: "", stderr: "failed", tests: { testsDiscovered: 1, testsExecuted: 1, testsPassed: 0, testsFailed: 1 } });
   assert.throws(() => sealNode(dir, [{ type: "test-result", path: recorded.path, actor: "graphrail" }], "PASS"), /cannot support PASS/);
+});
+
+test("execute with requiresTestPlanHash binds the authoritative test-plan artifact", () => {
+  const root = project();
+  const flow = resolve(root, "plan-bound.json");
+  writeFileSync(flow, JSON.stringify({
+    schemaVersion: 1, id: "plan-bound", entry: "design",
+    nodes: {
+      design: { kind: "review", evidence: ["evaluation", "test-plan"], minReviewers: 1, agentType: "graphrail-test-designer" },
+      execute: { kind: "execute", evidence: ["test-result"], requiresTestPlanHash: true },
+      gate: { kind: "gate" },
+    },
+    transitions: { design: { PASS: "execute" }, execute: { PASS: "gate" }, gate: { PASS: null } },
+    limits: { maxEdgeVisits: 2, maxNodeVisits: 3, maxSteps: 5 },
+  }));
+  const { dir } = createSession(flow, "PlanBind", root);
+  // Seal the design node: one evaluation + one test-plan.
+  const plan = { type: "test-plan", path: artifact(root, "plan.md", "plan with AUTH-NEG-01\nVERDICT: PASS"), actor: "tester", agentRunId: "agent-designer-1" };
+  const evalArtifact = { type: "evaluation", path: artifact(root, "eval.md", "design good\nVERDICT: PASS"), actor: "skeptic-owner", agentRunId: "agent-designer-2" };
+  attest(dir, [plan], "graphrail-test-designer");
+  attest(dir, [evalArtifact], "graphrail-test-designer");
+  sealNode(dir, [plan, evalArtifact]);
+  advance(dir); // -> execute
+  // Record a test with the CORRECT testPlanHash (plan's sha256).
+  const planSealed = readJson(handshakePath(dir, "design", 1));
+  const planArtifact = planSealed.artifacts.find((entry) => entry.type === "test-plan");
+  const good = recordTest(dir, "node --test", { exitCode: 0, tests: { testsDiscovered: 2, testsExecuted: 2, testsPassed: 2, testsFailed: 0 }, testPlanHash: planArtifact.sha256 });
+  sealNode(dir, [{ type: "test-result", path: good.path, actor: "graphrail" }]);
+  assert.equal(advance(dir).next, "gate");
+  // A wrong testPlanHash must be rejected.
+  const { dir: dir2 } = createSession(flow, "PlanBind2", root);
+  const plan2 = { type: "test-plan", path: artifact(root, "plan2.md", "plan B\nVERDICT: PASS"), actor: "tester", agentRunId: "agent-designer-3" };
+  const eval2 = { type: "evaluation", path: artifact(root, "eval2.md", "good\nVERDICT: PASS"), actor: "skeptic-owner", agentRunId: "agent-designer-4" };
+  attest(dir2, [plan2], "graphrail-test-designer");
+  attest(dir2, [eval2], "graphrail-test-designer");
+  sealNode(dir2, [plan2, eval2]);
+  advance(dir2);
+  const bad = recordTest(dir2, "node --test", { exitCode: 0, tests: { testsDiscovered: 2, testsExecuted: 2, testsPassed: 2, testsFailed: 0 }, testPlanHash: "deadbeef" });
+  assert.throws(() => sealNode(dir2, [{ type: "test-result", path: bad.path, actor: "graphrail" }]), /authoritative test-plan|does not match/);
+});
+
+test("execute reports testPlanCoverage and missing required cases are rejected", () => {
+  const root = project();
+  const flow = resolve(root, "coverage.json");
+  writeFileSync(flow, JSON.stringify({
+    schemaVersion: 1, id: "coverage", entry: "design",
+    nodes: {
+      design: { kind: "review", evidence: ["evaluation", "test-plan"], minReviewers: 1, agentType: "graphrail-test-designer" },
+      execute: { kind: "execute", evidence: ["test-result"] },
+      gate: { kind: "gate" },
+    },
+    transitions: { design: { PASS: "execute" }, execute: { PASS: "gate" }, gate: { PASS: null } },
+    limits: { maxEdgeVisits: 2, maxNodeVisits: 3, maxSteps: 5 },
+  }));
+  // The test-plan declares a required case AUTH-NEG-01.
+  const plan = { type: "test-plan", path: artifact(root, "plan.json", JSON.stringify({ cases: [{ id: "AUTH-NEG-01", requirement: "Reject non-Bearer auth", type: "negative", required: true }] })), actor: "tester", agentRunId: "agent-design-1" };
+  const evalArtifact = { type: "evaluation", path: artifact(root, "eval.md", "good\nVERDICT: PASS"), actor: "skeptic-owner", agentRunId: "agent-design-2" };
+  const { dir } = createSession(flow, "Coverage", root);
+  attest(dir, [plan], "graphrail-test-designer");
+  attest(dir, [evalArtifact], "graphrail-test-designer");
+  sealNode(dir, [plan, evalArtifact]);
+  advance(dir); // -> execute
+  // Coverage omits the required case -> seal rejected.
+  const missing = recordTest(dir, "node --test", { exitCode: 0, tests: { testsDiscovered: 1, testsExecuted: 1, testsPassed: 1, testsFailed: 0, testPlanCoverage: ["OTHER-01"] } });
+  assert.throws(() => sealNode(dir, [{ type: "test-result", path: missing.path, actor: "graphrail" }]), /required test-plan cases not covered/);
+  // With the required case covered -> seal passes.
+  const covered = recordTest(dir, "node --test", { exitCode: 0, tests: { testsDiscovered: 1, testsExecuted: 1, testsPassed: 1, testsFailed: 0, testPlanCoverage: ["AUTH-NEG-01"] } });
+  sealNode(dir, [{ type: "test-result", path: covered.path, actor: "graphrail" }]);
+  assert.equal(advance(dir).next, "gate");
 });
 
 test("edge, node, and total budgets are enforced", () => {
@@ -265,11 +342,80 @@ test("edge, node, and total budgets are enforced", () => {
     limits: { maxEdgeVisits: 1, maxNodeVisits: 2, maxSteps: 2 },
   }));
   const { dir } = createSession(flow, "Loop", root);
-  const first = artifact(root, "first-work.md", "first attempt");
-  sealNode(dir, [{ type: "deliverable", path: first, actor: "engineer" }], "ITERATE");
+  const first = { type: "deliverable", path: artifact(root, "first-work.md", "first attempt"), actor: "engineer", agentRunId: "agent-loop-a" };
+  attest(dir, [first], "graphrail-implementer");
+  sealNode(dir, [first], "ITERATE");
   advance(dir);
-  const second = artifact(root, "second-work.md", "second attempt");
-  sealNode(dir, [{ type: "deliverable", path: second, actor: "engineer" }], "ITERATE");
+  const second = { type: "deliverable", path: artifact(root, "second-work.md", "second attempt"), actor: "engineer", agentRunId: "agent-loop-b" };
+  attest(dir, [second], "graphrail-implementer");
+  sealNode(dir, [second], "ITERATE");
   assert.equal(route(dir, "ITERATE").allowed, false);
   assert.throws(() => advance(dir), /budget exhausted/);
+});
+
+test("implementer cannot review the same change it implemented", () => {
+  const root = project();
+  const { dir } = createSession("quick", "Isolation", root);
+  const deliverable = { type: "deliverable", path: artifact(root, "impl.md", "implementation"), actor: "engineer", agentRunId: "agent-shared-impl" };
+  attest(dir, [deliverable], "graphrail-implementer");
+  sealNode(dir, [deliverable]);
+  advance(dir); // -> review
+  const evaluations = [
+    { type: "evaluation", path: artifact(root, "rev-a.md", "A\nVERDICT: PASS"), actor: "skeptic-owner", agentRunId: "agent-shared-impl" },
+    { type: "evaluation", path: artifact(root, "rev-b.md", "B\nVERDICT: PASS"), actor: "tester", agentRunId: "agent-rev-b" },
+  ];
+  attestReviews(dir, evaluations.filter((entry) => entry.agentRunId === "agent-rev-b"));
+  // The implementer run has no reviewer lifecycle events; only the second is attested.
+  attest(dir, [{ path: artifact(root, "impl-again.md", "never used"), agentRunId: "agent-shared-impl" }], "graphrail-implementer");
+  assert.throws(() => sealNode(dir, evaluations), /previously implemented or designed/);
+});
+
+test("same agent ID cannot bypass role isolation by changing actor label", () => {
+  const root = project();
+  const { dir } = createSession("quick", "Isolation", root);
+  const deliverable = { type: "deliverable", path: artifact(root, "impl.md", "implementation"), actor: "engineer", agentRunId: "agent-impl-one" };
+  attest(dir, [deliverable], "graphrail-implementer");
+  sealNode(dir, [deliverable]);
+  advance(dir); // -> review
+  const evaluations = [
+    { type: "evaluation", path: artifact(root, "rev-a.md", "A\nVERDICT: PASS"), actor: "changed-label", agentRunId: "agent-impl-one" },
+    { type: "evaluation", path: artifact(root, "rev-b.md", "B\nVERDICT: PASS"), actor: "tester", agentRunId: "agent-rev-two" },
+  ];
+  attestReviews(dir, evaluations.filter((entry) => entry.agentRunId === "agent-rev-two"));
+  assert.throws(() => sealNode(dir, evaluations), /previously implemented or designed/);
+});
+
+test("work deliverables require an attested implementer with a bound Write/Edit event", () => {
+  const root = project();
+  const { dir } = createSession("quick", "Binding", root);
+  // No adapter binding at all: deliverable attestation fails closed.
+  const deliverable = { type: "deliverable", path: artifact(root, "impl.md", "implementation"), actor: "engineer", agentRunId: "agent-impl-no-events" };
+  assert.throws(() => sealNode(dir, [deliverable]), /no trusted Claude adapter binding/);
+  // Adapter bound but no lifecycle events recorded: attestation fails closed.
+  const { dir: dir2 } = createSession("quick", "Binding2", root);
+  bindClaudeAdapter(dir2, "00000000-0000-4000-8000-000000000001");
+  const deliverable2 = { type: "deliverable", path: artifact(root, "impl2.md", "implementation"), actor: "engineer", agentRunId: "agent-impl-no-events" };
+  assert.throws(() => sealNode(dir2, [deliverable2]), /no trusted Claude lifecycle ledger/);
+});
+
+test("test-design uses the test-designer agent type, not a generic reviewer", () => {
+  const root = project();
+  const { dir } = createSession("quick", "TestDesignRole", root);
+  // Advance build -> review -> gate-review -> test-design through a crafted review pass.
+  const deliverable = { type: "deliverable", path: artifact(root, "impl.md", "implementation"), actor: "engineer", agentRunId: "agent-impl-a" };
+  attest(dir, [deliverable], "graphrail-implementer");
+  sealNode(dir, [deliverable]);
+  advance(dir);
+  const reviews = [
+    { type: "evaluation", path: artifact(root, "rev-a.md", "A\nVERDICT: PASS"), actor: "skeptic-owner", agentRunId: "agent-rev-a" },
+    { type: "evaluation", path: artifact(root, "rev-b.md", "B\nVERDICT: PASS"), actor: "tester", agentRunId: "agent-rev-b" },
+  ];
+  attestReviews(dir, reviews);
+  sealNode(dir, reviews);
+  advance(dir); // -> gate-review
+  advance(dir); // -> test-design
+  const plan = { type: "test-plan", path: artifact(root, "plan.md", "plan\nVERDICT: PASS"), actor: "tester", agentRunId: "agent-designer" };
+  // Attest the plan as a generic reviewer: must be rejected because test-design requires graphrail-test-designer.
+  attest(dir, [plan], "graphrail-reviewer");
+  assert.throws(() => sealNode(dir, [plan]), /not a trusted graphrail-test-designer/);
 });

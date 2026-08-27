@@ -6,7 +6,9 @@
     "brief": { "kind": "plan" },
     "build": { "kind": "work" },
     "code-review": { "kind": "review", "evidence": ["evaluation"], "minReviewers": 2 },
-    "test-design": { "kind": "review", "evidence": ["evaluation", "test-plan"], "minReviewers": 2 },
+    "gate-code-review": { "kind": "gate" },
+    "test-design": { "kind": "review", "evidence": ["evaluation", "test-plan"], "minReviewers": 2, "agentType": "graphrail-test-designer" },
+    "gate-test-design": { "kind": "gate" },
     "test-execute": { "kind": "execute", "evidence": ["test-result"] },
     "hotfix": { "kind": "work" },
     "gate": { "kind": "gate" }
@@ -14,11 +16,13 @@
   "transitions": {
     "brief": { "PASS": "build" },
     "build": { "PASS": "code-review" },
-    "code-review": { "PASS": "test-design", "FAIL": "build", "ITERATE": "build" },
-    "test-design": { "PASS": "test-execute" },
-    "test-execute": { "PASS": "gate", "ITERATE": "hotfix" },
+    "code-review": { "PASS": "gate-code-review" },
+    "gate-code-review": { "PASS": "test-design", "FAIL": "build", "ITERATE": "build" },
+    "test-design": { "PASS": "gate-test-design" },
+    "gate-test-design": { "PASS": "test-execute", "FAIL": "build", "ITERATE": "build" },
+    "test-execute": { "PASS": "gate", "FAIL": "hotfix", "ITERATE": "hotfix" },
     "hotfix": { "PASS": "test-execute", "FAIL": "brief", "ITERATE": "build" },
     "gate": { "PASS": null, "FAIL": "brief", "ITERATE": "brief" }
   },
-  "limits": { "maxEdgeVisits": 3, "maxNodeVisits": 5, "maxSteps": 25 }
+  "limits": { "maxEdgeVisits": 3, "maxNodeVisits": 5, "maxSteps": 30 }
 }

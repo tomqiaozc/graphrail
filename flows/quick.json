@@ -5,16 +5,20 @@
   "nodes": {
     "build": { "kind": "work" },
     "review": { "kind": "review", "evidence": ["evaluation"], "minReviewers": 2 },
-    "test-design": { "kind": "review", "evidence": ["evaluation", "test-plan"], "minReviewers": 2 },
+    "gate-review": { "kind": "gate" },
+    "test-design": { "kind": "review", "evidence": ["evaluation", "test-plan"], "minReviewers": 2, "agentType": "graphrail-test-designer" },
+    "gate-test-design": { "kind": "gate" },
     "test-execute": { "kind": "execute", "evidence": ["test-result"] },
     "gate": { "kind": "gate" }
   },
   "transitions": {
     "build": { "PASS": "review" },
-    "review": { "PASS": "test-design", "FAIL": "build", "ITERATE": "build" },
-    "test-design": { "PASS": "test-execute" },
+    "review": { "PASS": "gate-review" },
+    "gate-review": { "PASS": "test-design", "FAIL": "build", "ITERATE": "build" },
+    "test-design": { "PASS": "gate-test-design" },
+    "gate-test-design": { "PASS": "test-execute", "FAIL": "build", "ITERATE": "build" },
     "test-execute": { "PASS": "gate", "FAIL": "build", "ITERATE": "build" },
     "gate": { "PASS": null, "FAIL": "build", "ITERATE": "build" }
   },
-  "limits": { "maxEdgeVisits": 2, "maxNodeVisits": 3, "maxSteps": 15 }
+  "limits": { "maxEdgeVisits": 3, "maxNodeVisits": 5, "maxSteps": 25 }
 }

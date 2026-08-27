@@ -23,15 +23,15 @@ Run `graphrail ls` first. When `GRAPHRAIL_MANAGED=1`, the trusted adapter has al
 1. Read `graphrail status` to obtain the authoritative node and run.
 2. Execute according to node kind:
    - `plan`: use architect; produce a concrete plan artifact.
-   - `work`: dispatch a fresh `graphrail-implementer` agent. The implementer must not review its own work.
-   - `review`: read `artifactDir` from `graphrail status`, then dispatch exactly two fresh, independent `graphrail-reviewer` agents unless the task clearly requires a third. Give each reviewer a distinct role/perspective and file inside `artifactDir`; require that reviewer to write its own evaluation with the Write or Edit tool, ending with `VERDICT: PASS|ITERATE|FAIL|BLOCKED`. Record each returned subagent run ID. Do not copy a review from a message into a file on the reviewer's behalf.
-   - `execute`: run real checks. Use `graphrail test --command <command>` so results receive provenance.
-   - `gate`: do no human or agent work. Do not dispatch a subagent, inspect findings through an agent, or modify any prior run artifact. Call `graphrail advance` directly; it revalidates the sealed chain, mechanically aggregates evidence, and routes the verdict.
-3. Seal every non-gate node with `graphrail seal --verdict PASS`, listing every deliverable and actor. Review artifacts use `evaluation:path:role:subagentRunId`; GraphRail rejects missing, duplicate, model-invented, failed, or unattested subagent runs and verifies that each exact artifact hash was written by that reviewer between trusted start and completion events. Never author a substitute evaluation when a subagent fails. A review node is PASS when the independent reviews completed; findings belong in evaluation artifacts and are decided by the gate.
+   - `work`: dispatch a fresh `graphrail-implementer` agent. The implementer must not review its own work, and must never claim to have executed a test suite — test commands are run by the GraphRail harness process.
+   - `review`: read `artifactDir` from `graphrail status`, then dispatch exactly two fresh, independent `graphrail-reviewer` agents (or `graphrail-test-designer` agents on a test-design node) unless the task clearly requires a third. Give each a distinct role/perspective and file inside `artifactDir`; require each to write its own evaluation with the Write or Edit tool, ending with `VERDICT: PASS|ITERATE|FAIL|BLOCKED`. Record each returned subagent run ID. Do not copy a review from a message into a file on the reviewer's behalf.
+   - `execute`: run real checks with `graphrail test --command <command>`. The command output must yield structured test statistics (TAP, Jest/Vitest JSON, JUnit, or a `--result-file` GraphRail JSON contract); a PASS is rejected when `testsExecuted === 0` unless the node declares `allowZeroTests`. Use `--probe <file>` on nodes that require fault sensitivity, and `--result-file <path> --format <fmt>` for runners GraphRail cannot parse.
+   - `gate`: do no human or agent work. Do not dispatch a subagent, inspect findings through an agent, or modify any prior run artifact. Call `graphrail advance` directly; it revalidates the sealed chain, mechanically aggregates the nearest upstream evidence, and routes the verdict. Explicit gates (e.g. `gate-review`, `gate-test-design`) route FAIL/ITERATE back to the build node immediately instead of deferring to the final gate.
+3. Seal every non-gate node with `graphrail seal --verdict PASS`, listing every deliverable and actor. Review artifacts use `evaluation:path:role:subagentRunId`; the test-plan uses `test-plan:path:role:agentRunId`. GraphRail rejects missing, duplicate, model-invented, failed, or unattested subagent runs and verifies that each exact artifact hash was written by that agent between trusted start and completion events. Never author a substitute evaluation when a subagent fails. A review node is PASS when the independent reviews completed; findings belong in evaluation artifacts and are decided by the nearest gate.
 4. Call `graphrail advance`; use only its returned node. At a gate this same command synthesizes and transitions automatically.
-5. Continue until the terminal edge, then call `graphrail finalize`.
+5. Continue until the terminal edge, then call `graphrail finalize`, which seals a signed chain head.
 
-For evaluation artifacts, use PASS when evidence supports completion, ITERATE for repairable findings, FAIL for material failure, and BLOCKED when external input is required. Never reuse an agent as both builder and reviewer. Forward repository instructions and verification commands to every dispatched agent.
+For evaluation artifacts, use PASS when evidence supports completion, ITERATE for repairable findings, FAIL for material failure, and BLOCKED when external input is required. Never reuse an agent as both builder and reviewer, and never reuse a test designer as the attestor of its own execution. Forward repository instructions and verification commands to every dispatched agent.
 
 Keep each evaluator artifact under 100 lines. Do not repeat probes already supported by captured evidence. If a gate loops back, identify the concrete state change required before dispatching reviewers again; never re-review unchanged inputs. The `review` built-in flow terminates with its aggregated verdict because its purpose is to report findings, not repair them.
 
@@ -39,6 +39,6 @@ Artifacts from a sealed run are immutable inputs to later gates. Never edit, nor
 
 ## Roles
 
-Role prompts live in `roles/`. Select the smallest relevant set. `skeptic-owner` is mandatory for every review node. Security-sensitive work includes `security`; user-facing work includes `designer` or `a11y`; verification includes `tester`.
+Role prompts live in `roles/`. Select the smallest relevant set. `skeptic-owner` is mandatory for every review node. Security-sensitive work includes `security`; user-facing work includes `designer` or `a11y`; test-design nodes use `test-designer`; verification includes `tester`.
 
 Custom flow prompt references supplement these roles but never override Harness routing or evidence requirements.

@@ -6,9 +6,9 @@ import { resolve } from "node:path";
 import { loadTemplate, validateTemplate } from "../lib/templates.mjs";
 
 const golden = {
-  quick: ["build", "review", "test-design", "test-execute", "gate"],
+  quick: ["build", "review", "gate-review", "test-design", "gate-test-design", "test-execute", "gate"],
   review: ["review", "gate"],
-  build: ["brief", "build", "code-review", "test-design", "test-execute", "hotfix", "gate"],
+  build: ["brief", "build", "code-review", "gate-code-review", "test-design", "gate-test-design", "test-execute", "hotfix", "gate"],
   verify: ["acceptance", "gate-acceptance", "audit", "gate-audit", "e2e-user", "gate-e2e"],
 };
 
@@ -18,6 +18,24 @@ test("built-in flows match their golden node order and validate", () => {
     assert.deepEqual(Object.keys(template.nodes), nodes);
     assert.deepEqual(validateTemplate(template), []);
   }
+});
+
+test("explicit review gates make FAIL and ITERATE edges reachable from evidence", () => {
+  const quick = loadTemplate("quick").template;
+  assert.equal(quick.transitions.review.PASS, "gate-review");
+  assert.equal(quick.transitions["gate-review"].PASS, "test-design");
+  assert.equal(quick.transitions["gate-review"].FAIL, "build");
+  assert.equal(quick.transitions["gate-review"].ITERATE, "build");
+  assert.equal(quick.transitions["gate-test-design"].PASS, "test-execute");
+  assert.equal(quick.transitions["gate-test-design"].FAIL, "build");
+  assert.equal(quick.transitions["gate-test-design"].ITERATE, "build");
+  assert.equal(quick.transitions["test-execute"].FAIL, "build");
+  assert.equal(quick.transitions["test-execute"].ITERATE, "build");
+  const build = loadTemplate("build").template;
+  assert.equal(build.transitions["code-review"].PASS, "gate-code-review");
+  assert.equal(build.transitions["gate-code-review"].PASS, "test-design");
+  assert.equal(build.transitions["gate-code-review"].FAIL, "build");
+  assert.equal(build.transitions["gate-code-review"].ITERATE, "build");
 });
 
 test("custom flow loads through the same validator", () => {
