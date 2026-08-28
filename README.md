@@ -2,6 +2,8 @@
 
 GraphRail is a zero-dependency, deterministic graph harness for evidence-backed agent workflows. Agents decide how to do work; GraphRail decides whether a workflow may advance.
 
+> **Design principle — trust evidence, not agents.** GraphRail treats coding agents as untrusted probabilistic workers. It separates planning, implementation, independent multi-perspective review, and test design across isolated roles; the harness—not an agent—executes tests, validates run-bound evidence, and mechanically routes `PASS / ITERATE / FAIL / BLOCKED`. Missing, stale, forged, or contradictory evidence fails closed.
+
 > **Status: Production candidate.** The deterministic Harness, managed Claude adapter, explicit review/design gates, full-role attestation, structured test evidence with mutation-probe sensitivity, hash-chained ledgers, package installation, interruption recovery, and all four real-flow acceptance fixtures pass. The remaining boundary is documented in [VALIDATION.md](VALIDATION.md): GraphRail does not defend against a malicious process with unrestricted access to the same OS account.
 
 ## Why it exists
